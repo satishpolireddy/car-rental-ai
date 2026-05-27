@@ -1,0 +1,142 @@
+version: '3.9'
+
+services:
+  # ─── Infrastructure ──────────────────────────────────────────────────────────
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      SA_PASSWORD: "CarRental_Dev!23"
+      ACCEPT_EULA: "Y"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P CarRental_Dev!23 -Q 'SELECT 1' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── Auth Service (Email OTP + JWT) ──────────────────────────────────────────
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+      DB_HOST: sqlserver
+      DB_PORT: "1433"
+      DB_USER: sa
+      DB_PASSWORD: "CarRental_Dev!23"
+      DB_NAME: carrental_auth
+      REDIS_ADDR: redis:6379
+      JWT_SECRET: "dev-jwt-secret-change-in-prod"
+      SMTP_HOST: "${SMTP_HOST:-smtp.gmail.com}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER}"
+      SMTP_PASSWORD: "${SMTP_PASSWORD}"
+      FROM_EMAIL: "${FROM_EMAIL:-noreply@carrental.dev}"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Payment Service (Stripe) ─────────────────────────────────────────────────
+  payment-service:
+    build:
+      context: ./services/payment-service
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: "8082"
+      DB_HOST: sqlserver
+      DB_PORT: "1433"
+      DB_USER: sa
+      DB_PASSWORD: "CarRental_Dev!23"
+      DB_NAME: carrental_payments
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY}"
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET}"
+      AUTH_SERVICE_URL: "http://auth-service:8081"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+    restart: unless-stopped
+
+  # ─── Booking / Core Backend ───────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8083:8083"
+    environment:
+      PORT: "8083"
+      DB_HOST: sqlserver
+      DB_PORT: "1433"
+      DB_USER: sa
+      DB_PASSWORD: "CarRental_Dev!23"
+      DB_NAME: carrental
+      REDIS_ADDR: redis:6379
+      AZURE_OPENAI_ENDPOINT: "${AZURE_OPENAI_ENDPOINT}"
+      AZURE_OPENAI_KEY: "${AZURE_OPENAI_KEY}"
+      AZURE_OPENAI_DEPLOYMENT: "${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── API Gateway (single entry point, port 8080) ─────────────────────────────
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      AUTH_SERVICE_URL: "http://auth-service:8081"
+      BOOKING_SERVICE_URL: "http://backend:8083"
+      PAYMENT_SERVICE_URL: "http://payment-service:8082"
+    depends_on:
+      - auth-service
+      - payment-service
+      - backend
+    restart: unless-stopped
+
+  # ─── Frontend ─────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: "http://localhost:8080"
+        VITE_STRIPE_PUBLISHABLE_KEY: "${VITE_STRIPE_PUBLISHABLE_KEY}"
+    ports:
+      - "3000:80"
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+
+volumes:
+  sqlserver_data:

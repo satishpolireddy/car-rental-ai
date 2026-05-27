@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-config
+data:
+  PORT: "8080"
+  AUTH_SERVICE_URL: "http://auth-service:8081"
+  BOOKING_SERVICE_URL: "http://booking-service:8083"
+  PAYMENT_SERVICE_URL: "http://payment-service:8082"

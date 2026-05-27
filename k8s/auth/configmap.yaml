@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-service-config
+data:
+  PORT: "8081"
+  DB_PORT: "1433"
+  DB_NAME: "carrental_auth"
+  SMTP_PORT: "587"

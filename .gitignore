@@ -1,0 +1,26 @@
+# Binaries
+*.exe
+*.o
+*.a
+/backend/server
+/services/*/server
+
+# Go
+vendor/
+*.sum
+
+# Node
+node_modules/
+dist/
+.env
+*.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Terraform state
+*.tfstate
+*.tfstate.backup
+.terraform/
