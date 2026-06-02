@@ -28,8 +28,6 @@ Always be concise, friendly, and specific. When recommending cars, mention:
 Return your response as JSON with fields: "message" (string) and "recommended_car_ids" (array of integers).`
 )
 
-// AIService wraps Azure OpenAI and Redis for recommendation logic.
-// Redis caching prevents redundant API calls for identical queries, reducing cost and latency.
 type AIService struct {
 	client     *azopenai.Client
 	deployment string
@@ -51,12 +49,9 @@ func NewAIService(cfg config.AzureConfig, rdb *redis.Client, carRepo *repository
 	}, nil
 }
 
-// Recommend returns AI-generated car recommendations based on a natural language query.
-// Results are cached in Redis using the query as the key.
 func (s *AIService) Recommend(ctx context.Context, req models.AIQueryRequest, availableCars []models.Car) (*AIResponse, error) {
 	cacheKey := cachePrefix + hashQuery(req.Query)
 
-	// Check Redis cache first
 	if cached, err := s.redis.Get(ctx, cacheKey).Result(); err == nil {
 		var resp AIResponse
 		if json.Unmarshal([]byte(cached), &resp) == nil {
@@ -65,19 +60,20 @@ func (s *AIService) Recommend(ctx context.Context, req models.AIQueryRequest, av
 		}
 	}
 
-	// Build context message with available cars
 	carContext := buildCarContext(availableCars)
 	userMessage := fmt.Sprintf("Customer query: %s\n\nAvailable cars:\n%s", req.Query, carContext)
 	if req.Context != "" {
 		userMessage += "\n\nAdditional context: " + req.Context
 	}
 
+	sysPrompt := systemPrompt
+	usrMsg := userMessage
 	start := time.Now()
 	resp, err := s.client.GetChatCompletions(ctx, azopenai.ChatCompletionsOptions{
 		DeploymentName: &s.deployment,
 		Messages: []azopenai.ChatRequestMessageClassification{
-			&azopenai.ChatRequestSystemMessage{Content: azopenai.NewChatRequestSystemMessageContent(systemPrompt)},
-			&azopenai.ChatRequestUserMessage{Content: azopenai.NewChatRequestUserMessageContent(userMessage)},
+			&azopenai.ChatRequestSystemMessage{Content: &sysPrompt},
+			&azopenai.ChatRequestUserMessage{Content: azopenai.NewChatRequestUserMessageContent(usrMsg)},
 		},
 		ResponseFormat: &azopenai.ChatCompletionsJSONResponseFormat{},
 		MaxTokens:      toPtr(int32(800)),
@@ -94,13 +90,11 @@ func (s *AIService) Recommend(ctx context.Context, req models.AIQueryRequest, av
 
 	var aiResp AIResponse
 	if err := json.Unmarshal([]byte(rawContent), &aiResp); err != nil {
-		// Fallback: return raw message if JSON parse fails
 		aiResp = AIResponse{Message: rawContent}
 	}
 	aiResp.LatencyMs = latency
 	aiResp.TokensUsed = tokensUsed
 
-	// Cache the result
 	if b, err := json.Marshal(aiResp); err == nil {
 		s.redis.Set(ctx, cacheKey, string(b), cacheTTL)
 	}
@@ -115,10 +109,10 @@ func (s *AIService) Recommend(ctx context.Context, req models.AIQueryRequest, av
 }
 
 type AIResponse struct {
-	Message            string `json:"message"`
-	RecommendedCarIDs  []uint `json:"recommended_car_ids"`
-	LatencyMs          int    `json:"latency_ms,omitempty"`
-	TokensUsed         int    `json:"tokens_used,omitempty"`
+	Message           string `json:"message"`
+	RecommendedCarIDs []uint `json:"recommended_car_ids"`
+	LatencyMs         int    `json:"latency_ms,omitempty"`
+	TokensUsed        int    `json:"tokens_used,omitempty"`
 }
 
 func buildCarContext(cars []models.Car) string {
@@ -134,7 +128,6 @@ func buildCarContext(cars []models.Car) string {
 }
 
 func hashQuery(q string) string {
-	// Simple normalisation — lowercase + trim
 	return strings.ToLower(strings.TrimSpace(q))
 }
 
