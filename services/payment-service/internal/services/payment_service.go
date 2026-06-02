@@ -12,11 +12,9 @@ import (
 	"github.com/stripe/stripe-go/v78/refund"
 )
 
-// PaymentService wraps Stripe and manages the payment lifecycle.
-// All amounts are in cents (smallest currency unit) per Stripe convention.
 type PaymentService struct {
-	repo       *repository.PaymentRepository
-	stripeKey  string
+	repo      *repository.PaymentRepository
+	stripeKey string
 }
 
 func NewPaymentService(repo *repository.PaymentRepository, stripeKey string) *PaymentService {
@@ -24,15 +22,12 @@ func NewPaymentService(repo *repository.PaymentRepository, stripeKey string) *Pa
 	return &PaymentService{repo: repo, stripeKey: stripeKey}
 }
 
-// CreatePaymentIntent creates a Stripe PaymentIntent and records it in DB.
-// Returns a client_secret that the frontend uses with Stripe.js to collect card details.
 func (s *PaymentService) CreatePaymentIntent(ctx context.Context, req models.CreatePaymentRequest) (*models.PaymentResponse, error) {
 	currency := req.Currency
 	if currency == "" {
 		currency = "usd"
 	}
 
-	// Create Stripe PaymentIntent
 	params := &stripe.PaymentIntentParams{
 		Amount:   stripe.Int64(req.AmountCents),
 		Currency: stripe.String(currency),
@@ -50,7 +45,6 @@ func (s *PaymentService) CreatePaymentIntent(ctx context.Context, req models.Cre
 		return nil, fmt.Errorf("stripe create payment intent: %w", err)
 	}
 
-	// Persist to DB
 	payment := &models.Payment{
 		BookingID:           req.BookingID,
 		CustomerID:          req.CustomerID,
@@ -73,21 +67,15 @@ func (s *PaymentService) CreatePaymentIntent(ctx context.Context, req models.Cre
 	return toResponse(payment, true), nil
 }
 
-// HandleWebhook processes Stripe webhook events to keep payment status in sync.
-// This is the authoritative source of truth — never trust client-side confirmation.
 func (s *PaymentService) HandleWebhook(ctx context.Context, event stripe.Event) error {
 	switch event.Type {
 	case "payment_intent.succeeded":
-		var pi stripe.PaymentIntent
-		if err := event.Data.Object.UnmarshalJSON([]byte("")); err != nil {
-			// Use the raw event data
-			pi.ID = event.Data.Object["id"].(string)
-			chargeID := ""
-			if charges, ok := event.Data.Object["latest_charge"].(string); ok {
-				chargeID = charges
-			}
-			return s.repo.UpdateByIntentID(ctx, pi.ID, "succeeded", chargeID, "")
+		piID, _ := event.Data.Object["id"].(string)
+		chargeID := ""
+		if c, ok := event.Data.Object["latest_charge"].(string); ok {
+			chargeID = c
 		}
+		return s.repo.UpdateByIntentID(ctx, piID, "succeeded", chargeID, "")
 
 	case "payment_intent.payment_failed":
 		piID, _ := event.Data.Object["id"].(string)
@@ -112,7 +100,6 @@ func (s *PaymentService) HandleWebhook(ctx context.Context, event stripe.Event) 
 	return nil
 }
 
-// Refund initiates a full refund for a succeeded payment.
 func (s *PaymentService) Refund(ctx context.Context, req models.RefundRequest) (*models.Payment, error) {
 	payment, err := s.repo.GetByID(ctx, req.PaymentID)
 	if err != nil {
